@@ -117,7 +117,7 @@ $services = $data['services'];
             </div>
         </div>
 
-        <!-- 3D Scroll Spacers (400vh Drive Experience) -->
+        <!-- 3D Scroll Spacers (~1040vh Drive Experience) -->
         <div class="drive-scroll-track">
             <!-- Hero Entrance -->
             <section id="scene-hero" class="drive-scene scene-hero">
@@ -167,6 +167,14 @@ $services = $data['services'];
             </section>
 
             <!-- Spline Highway Spacers -->
+            <div class="drive-spacer" style="height: 80vh;"></div>
+            <div class="drive-spacer" style="height: 80vh;"></div>
+            <div class="drive-spacer" style="height: 80vh;"></div>
+            <div class="drive-spacer" style="height: 80vh;"></div>
+            <div class="drive-spacer" style="height: 80vh;"></div>
+            <div class="drive-spacer" style="height: 80vh;"></div>
+            <div class="drive-spacer" style="height: 80vh;"></div>
+            <div class="drive-spacer" style="height: 80vh;"></div>
             <div class="drive-spacer" style="height: 80vh;"></div>
             <div class="drive-spacer" style="height: 80vh;"></div>
             <div class="drive-spacer" style="height: 80vh;"></div>
@@ -532,8 +540,7 @@ $services = $data['services'];
     <?php include __DIR__ . '/includes/modals.php'; ?>
 
     <!-- JS Scripts (Local Cached Fast Loading) -->
-    <script src="assets/vendor/three.min.js"></script>
-    <script src="assets/vendor/GLTFLoader.js"></script>
+    <script src="assets/vendor/three-r180.bundle.js"></script>
     <script src="assets/vendor/gsap.min.js"></script>
     <script src="assets/vendor/ScrollTrigger.min.js"></script>
     <script src="assets/vendor/lenis.min.js"></script>
@@ -541,7 +548,7 @@ $services = $data['services'];
 
     <!-- Core App JS -->
     <script src="assets/js/audio.js?v=16.0"></script>
-    <script src="assets/js/scene3d.js?v=16.0"></script>
+    <script src="assets/js/scene3d-cinematic.js?v=17.0"></script>
     <script src="assets/js/booking.js?v=16.0"></script>
     <script src="assets/js/main.js?v=16.0"></script>
 </body>
