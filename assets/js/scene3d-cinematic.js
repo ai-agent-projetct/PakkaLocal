@@ -59,9 +59,10 @@
     'pack_wagon.glb': true,
     'pack_offroad.glb': true,
     'pack_suv.glb': true,
+    'pack_pickup.glb': true,
+    'setcbus.glb': true,
     // these face +Z already — do NOT flip
-    // pack_hatchback, pack_compact, pack_coupe, pack_minivan,
-    // pack_pickup, pack_car8
+    // pack_hatchback, pack_compact, pack_coupe, pack_minivan, pack_car8
     // correct as authored: autorickshaw, checkers, setcbus, porsche, sedan, scorpio
   };
 
@@ -141,7 +142,7 @@
     // other hero-grade cars seen in traffic too
     'sedan.glb': 2, 'xuv3xo.glb': 2, 'scorpiohp.glb': 2, 'dzire.glb': 3,
     // buses
-    'setcbus.glb': 3
+    'setcbus.glb': 8
   };
   const TRAFFIC_COUNT = 38;
 
@@ -166,6 +167,10 @@
   };
 
   // Vehicles too wide or long for the outer lane keep to the inner lane.
+  // True overall height in metres, used to stop badly-proportioned sources
+  // scaling into skyscrapers when normalised by length alone.
+  const VEHICLE_HEIGHTS = { 'setcbus.glb': 3.30 };
+
   const BIG_VEHICLES = ['setcbus.glb', 'pack_minivan.glb', 'pack_pickup.glb'];
 
   /**
@@ -376,8 +381,8 @@
       // path swings wide and snakes back. Replacing each corner with a real
       // circular arc — cut back along both legs by RADIUS and sweep between —
       // keeps the turn at exactly 90 and the approach dead straight.
-      const RADIUS = 16 * CITY_SCALE;
-      const ARC_STEPS = 10;
+      const RADIUS = 30 * CITY_SCALE;
+      const ARC_STEPS = 16;
 
       const pts = waypoints.map(w => new THREE.Vector3().fromArray(w));
       const path = [];
@@ -783,7 +788,7 @@
       return doomed.length;
     }
 
-    _normalize(obj, targetLength, file) {
+    _normalize(obj, targetLength, file, targetHeight) {
       this._stripNonRenderables(obj);
       const box = new THREE.Box3().setFromObject(obj);
       const size = box.getSize(new THREE.Vector3());
@@ -791,7 +796,14 @@
 
       const forwardIsX = size.x >= size.z;
       const currentLength = forwardIsX ? size.x : size.z;
-      if (currentLength > 0) obj.scale.multiplyScalar(targetLength / currentLength);
+      let k = (currentLength > 0) ? (targetLength / currentLength) : 1;
+      // Some sources are badly out of proportion — the SETC bus came out
+      // 4.7m tall when scaled purely by length. Where a true height is
+      // known, cap the scale so the vehicle cannot tower over the street.
+      if (targetHeight && size.y > 0) {
+        k = Math.min(k, targetHeight / size.y);
+      }
+      obj.scale.multiplyScalar(k);
 
       const box2 = new THREE.Box3().setFromObject(obj);
       const c = box2.getCenter(new THREE.Vector3());
@@ -1071,12 +1083,18 @@
       });
       if (!pool.length) return;
 
+      // Guarantee a few buses up front. Pure weighted sampling can produce
+      // zero across the whole route, which reads as "there is no bus".
+      const GUARANTEED = ['setcbus.glb', 'setcbus.glb', 'setcbus.glb',
+                          'autorickshaw.glb', 'scifibike.glb'];
       for (let i = 0; i < TRAFFIC_COUNT; i++) {
-        const file = pool[Math.floor(Math.random() * pool.length)];
+        const file = (i < GUARANTEED.length && this._rawModels[GUARANTEED[i]])
+          ? GUARANTEED[i]
+          : pool[Math.floor(Math.random() * pool.length)];
         const src = this._rawModels[file];
         if (!src) continue;
         const len = lengths[file] || 3;
-        const v = this._normalize(src.clone(true), len, file);
+        const v = this._normalize(src.clone(true), len, file, VEHICLE_HEIGHTS[file]);
         // vary helmet/jacket colour so the traffic doesn't look cloned
         const tints = [0xd4af37, 0xc0392b, 0x2e6fb7, 0xe8e8ea, 0x2f8f5b];
         this._mountLamps(v, file);
@@ -1701,6 +1719,11 @@
 
       for (let i = 0; i < this.traffic.length; i++) {
         const c = this.traffic[i];
+        // PARKED vehicles hold their last good pose and stop advancing.
+        // A vehicle that repeatedly cannot keep all four corners on the
+        // carriageway is better read as parked at the kerb than as traffic
+        // driving along the footpath, so it stops rather than trespassing.
+        if (c.parked) continue;
         const n = Math.max(1, this._laneCount[c.laneIdx]);
         c.t = this._lanePhase[c.laneIdx] + c.slot / n;
         if (c.t > 1) c.t -= 1;
@@ -1778,11 +1801,18 @@
           const cHit = this._ray.intersectObjects(this._cityTargets, false)[0];
           const cornerOffRoad = !cHit || Math.abs(cHit.point.y - pos.y) > 1.2;
           if (cornerOffRoad) {
-            // Pull in, but never past the lane inside this one — letting an
-            // outer-lane vehicle collapse onto the inner lane traded footpath
-            // driving for head-to-tail collisions in the same lane.
             const floor = (c.laneIdx >= 2) ? 0.34 : 0.10;
             c.laneFrac = Math.max(floor, c.laneFrac * 0.82);
+            // If pulling in repeatedly fails to get it back on the road,
+            // park it rather than let it keep driving along the footpath.
+            c.strikes = (c.strikes || 0) + 1;
+            if (c.strikes > 6 && !c.parked) {
+              c.parked = true;
+              c.obj.visible = true;
+              this._parkedCount = (this._parkedCount || 0) + 1;
+            }
+          } else if (c.strikes) {
+            c.strikes--;
           }
 
           this._ray.set(new THREE.Vector3(pos.x, 140, pos.z), down);
