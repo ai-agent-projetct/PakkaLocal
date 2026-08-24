@@ -200,15 +200,29 @@
   // junction was validated against a raycast road-mask of the city mesh, so
   // each leg runs on real carriageway and each corner lands where two
   // corridors genuinely cross.
+  /**
+   * Scale applied to the whole city. Vehicles keep their true metric size,
+   * so scaling the city up makes every road proportionally WIDER relative
+   * to the traffic on it — which is the "enlarge the road" fix. Route
+   * waypoints below are in unscaled city coordinates and are multiplied by
+   * this at build time, so the two stay in step.
+   */
+  const CITY_SCALE = 1.5;
+
+  /**
+   * Legs are deliberately long. The previous route turned at z=0 and again
+   * at z=-40 — two 90-degree turns just 40m apart, and the spline overshot
+   * both (measured 106 and 105 degrees where it should bend 90). Back to
+   * back like that it reads as a crooked zigzag, which is what showed up
+   * during the auto phase. Every leg here is at least 112m.
+   */
   const ROUTE = [
     [ 208, 0,  112],
-    [ 208, 0,    0],   // right onto the z=0 road
-    [  24, 0,    0],   // left  onto the x=24 avenue
-    [  24, 0,  -40],   // right onto the z=-40 road
-    [ -96, 0,  -40],   // left  onto the x=-96 avenue
-    [ -96, 0, -112],   // right onto the z=-112 road
-    [-208, 0, -112],   // right onto the x=-208 avenue
-    [-208, 0,   96],   // left  onto the z=96 boulevard
+    [ 208, 0,    0],   // turn 1 — onto the z=0 road      (112m)
+    [  24, 0,    0],   // turn 2 — onto the x=24 avenue   (184m)
+    [  24, 0, -112],   // turn 3 — onto the z=-112 road   (112m)
+    [-208, 0, -112],   // turn 4 — onto the x=-208 avenue (232m)
+    [-208, 0,   96],   // turn 5 — onto the z=96 boulevard(208m)
     [ -40, 0,   96]
   ];
 
@@ -355,21 +369,61 @@
      * spline to the straight sections and confines curvature to the corner.
      */
     _densifyRoute(waypoints, spacing) {
-      const out = [];
-      for (let i = 0; i < waypoints.length - 1; i++) {
-        const a = new THREE.Vector3().fromArray(waypoints[i]);
-        const b = new THREE.Vector3().fromArray(waypoints[i + 1]);
-        const steps = Math.max(1, Math.round(a.distanceTo(b) / spacing));
-        for (let s = 0; s < steps; s++) {
-          out.push(a.clone().lerp(b, s / steps));
+      // Corner FILLETS, not raw vertices.
+      //
+      // Feeding a Catmull-Rom a sharp 90-degree vertex makes it overshoot:
+      // measured 105-106 degrees of turn where the corner is only 90, so the
+      // path swings wide and snakes back. Replacing each corner with a real
+      // circular arc — cut back along both legs by RADIUS and sweep between —
+      // keeps the turn at exactly 90 and the approach dead straight.
+      const RADIUS = 16 * CITY_SCALE;
+      const ARC_STEPS = 10;
+
+      const pts = waypoints.map(w => new THREE.Vector3().fromArray(w));
+      const path = [];
+
+      for (let i = 0; i < pts.length; i++) {
+        const cur = pts[i];
+        if (i === 0 || i === pts.length - 1) { path.push(cur.clone()); continue; }
+
+        const prev = pts[i - 1], next = pts[i + 1];
+        const inDir = cur.clone().sub(prev).normalize();
+        const outDir = next.clone().sub(cur).normalize();
+
+        // never eat more than 45% of either leg
+        const r = Math.min(RADIUS,
+          cur.distanceTo(prev) * 0.45, cur.distanceTo(next) * 0.45);
+
+        const start = cur.clone().addScaledVector(inDir, -r);
+        const end = cur.clone().addScaledVector(outDir, r);
+        path.push(start);
+        // quadratic Bezier through the corner approximates the arc closely
+        for (let s = 1; s < ARC_STEPS; s++) {
+          const u = s / ARC_STEPS, iu = 1 - u;
+          path.push(new THREE.Vector3(
+            iu * iu * start.x + 2 * iu * u * cur.x + u * u * end.x,
+            iu * iu * start.y + 2 * iu * u * cur.y + u * u * end.y,
+            iu * iu * start.z + 2 * iu * u * cur.z + u * u * end.z));
         }
+        path.push(end);
       }
-      out.push(new THREE.Vector3().fromArray(waypoints[waypoints.length - 1]));
+
+      // densify the straights so the spline cannot bow between corners
+      const out = [];
+      for (let i = 0; i < path.length - 1; i++) {
+        const a = path[i], b = path[i + 1];
+        const steps = Math.max(1, Math.round(a.distanceTo(b) / spacing));
+        for (let s = 0; s < steps; s++) out.push(a.clone().lerp(b, s / steps));
+      }
+      out.push(path[path.length - 1].clone());
       return out;
     }
 
     _buildRoute() {
-      const pts = this._densifyRoute(ROUTE, 25);
+      const scaled = ROUTE.map(function (w) {
+        return [w[0] * CITY_SCALE, w[1] * CITY_SCALE, w[2] * CITY_SCALE];
+      });
+      const pts = this._densifyRoute(scaled, 25 * CITY_SCALE);
       this.curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
       this.routeLength = this.curve.getLength();
       this.groundProfile = null;
@@ -456,7 +510,7 @@
       // fine sweep (240 samples x 0.5m steps to 24m) is ~23,000 raycasts
       // against 666 meshes, which locks the main thread for minutes. A
       // coarse sweep resolves the kerb line just as well for centring.
-      const MAXP = 18, STEP = 1.5;
+      const MAXP = 18 * CITY_SCALE, STEP = 1.5 * CITY_SCALE;
 
       const clearAt = (x, z) => {
         ray.set(new THREE.Vector3(x, 200, z), down);
@@ -695,6 +749,10 @@
         });
       });
 
+      // Enlarge the city relative to the (true-size) vehicles, so the roads
+      // read as genuinely wide rather than the traffic looking oversized.
+      root.scale.setScalar(CITY_SCALE);
+      root.updateMatrixWorld(true);
       this.city = root;
       // cached once for the traffic clearance probe
       this._cityTargets = [];
@@ -1080,7 +1138,7 @@
       // the effect the reference site gets.
       const W = 11.0, H = 5.0;
       const CLEAR = 6.6;    // underside height — traffic passes beneath
-      const LEG_MIN = 4.0, LEG_MAX = 24.0;
+      const LEG_MIN = 4.0, LEG_MAX = 24.0 * CITY_SCALE;
 
       // A fixed 8m half-span plants the legs wherever they happen to land.
       // Where the carriageway is wider than that, the posts stand IN the
