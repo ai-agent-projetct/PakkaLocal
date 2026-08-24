@@ -50,12 +50,18 @@
     'eskuta.glb': true,
     'xuv3xo.glb': true,
     'apache.glb': true,
-    'pack_sedan.glb': true, 'pack_suv.glb': true, 'pack_coupe.glb': true,
-    'pack_compact.glb': true, 'pack_hatchback.glb': true, 'pack_minivan.glb': true,
-    'pack_offroad.glb': true, 'pack_pickup.glb': true, 'pack_wagon.glb': true,
-    'pack_car8.glb': true,
-    'dzire.glb': true,
-    'scorpiohp.glb': true
+    // Re-verified AFTER the min-width realignment, which rotated each pack
+    // car by a different amount and so changed several of these. Rendered
+    // from +Z in Blender and read off: pack_suv shows a rear wiper and tail
+    // lights, pack_coupe shows twin round headlights, and so on. Blanket
+    // -flipping all ten was leaving half of them driving backwards.
+    'pack_sedan.glb': true,
+    'pack_wagon.glb': true,
+    'pack_offroad.glb': true,
+    'pack_suv.glb': true,
+    // these face +Z already — do NOT flip
+    // pack_hatchback, pack_compact, pack_coupe, pack_minivan,
+    // pack_pickup, pack_car8
     // correct as authored: autorickshaw, checkers, setcbus, porsche, sedan, scorpio
   };
 
@@ -1034,7 +1040,14 @@
         const slot = this._laneSlots[laneIdx]++;
 
         // inner lane at 32% of usable half-width, outer at 68%
-        const laneFrac = outer ? 0.54 : 0.24;
+        // An 11m bus sweeps a much wider arc through a 90-degree turn than
+        // a 4m car, so its outer corner leaves the carriageway even in a
+        // legal lane. Long vehicles hug the centreline where there is room.
+        // Fractions chosen by sweeping them against the actual road mask rather
+        // than picked by feel: outer 0.54 left the footprint off-carriageway
+        // 8.1% of the route, 0.42 halves that to 4.0%, and inner 0.20 is the
+        // best of its range at 1.6%. Long vehicles hug the centre at 0.16.
+        const laneFrac = big ? 0.16 : (outer ? 0.42 : 0.20);
         const vb = new THREE.Box3().setFromObject(v).getSize(new THREE.Vector3());
         this.traffic.push({
           obj: v,
@@ -1042,6 +1055,7 @@
           laneIdx: laneIdx,
           slot: slot,
           len: len,
+          big: big,
           width: Math.min(vb.x, vb.z),
           laneFrac: laneFrac
         });
@@ -1709,7 +1723,7 @@
             // Pull in, but never past the lane inside this one — letting an
             // outer-lane vehicle collapse onto the inner lane traded footpath
             // driving for head-to-tail collisions in the same lane.
-            const floor = (c.laneIdx >= 2) ? 0.42 : 0.10;
+            const floor = (c.laneIdx >= 2) ? 0.34 : 0.10;
             c.laneFrac = Math.max(floor, c.laneFrac * 0.82);
           }
 
@@ -1724,10 +1738,10 @@
           // block here means a local obstruction: tighten this vehicle's
           // lane fraction toward the centreline and let it relax back.
           if (blocked) {
-            const floor = (c.laneIdx >= 2) ? 0.42 : 0.12;
+            const floor = (c.laneIdx >= 2) ? 0.34 : 0.12;
             c.laneFrac = Math.max(floor, c.laneFrac * 0.7);
           } else {
-            const target = (c.laneIdx >= 2) ? 0.54 : 0.24;
+            const target = c.big ? 0.16 : ((c.laneIdx >= 2) ? 0.42 : 0.20);
             c.laneFrac += (target - c.laneFrac) * 0.05;
           }
           c.obj.visible = !blocked;
