@@ -61,9 +61,14 @@
     'pack_suv.glb': true,
     'pack_pickup.glb': true,
     'setcbus.glb': true,
-    // these face +Z already — do NOT flip
-    // pack_hatchback, pack_compact, pack_coupe, pack_minivan, pack_car8
-    // correct as authored: autorickshaw, checkers, setcbus, porsche, sedan, scorpio
+    // REGRESSION GUARD: these two were dropped once by a careless block
+    // rewrite of the pack-car entries above, which silently sent the ridden
+    // Swift Dzire and the Scorpio down the road backwards. Keep them here.
+    'dzire.glb': true,
+    'scorpiohp.glb': true
+    // these face +Z already — do NOT flip:
+    // pack_hatchback, pack_compact, pack_coupe, pack_minivan, pack_car8,
+    // autorickshaw, checkers, sedan, porsche
   };
 
   // Which kind of occupant each model needs. Cars are enclosed and read
@@ -1567,6 +1572,49 @@
       if (persist) this._flipPersist = true;
       console.log('[Pakka3D] vehicles ' + (this._flipped ? 'FLIPPED 180' : 'restored'));
       return this._flipped;
+    }
+
+    /**
+     * Turn one model around live, by name or by a partial match.
+     *   pakka3D.flipModel('bus')     -> flips setcbus.glb
+     *   pakka3D.flipModel('green')   -> lists options if ambiguous
+     * Applies to the ridden vehicle and every one of that model in traffic,
+     * so you can confirm a fix on the page instead of describing it.
+     */
+    flipModel(name) {
+      const files = Object.keys(this._rawModels || {});
+      const hits = files.filter(f => f.toLowerCase().indexOf(String(name).toLowerCase()) !== -1);
+      if (!hits.length) {
+        console.log('[Pakka3D] no model matches "' + name + '". Loaded:', files.join(', '));
+        return files;
+      }
+      if (hits.length > 1) {
+        console.log('[Pakka3D] "' + name + '" matches several:', hits.join(', '));
+        return hits;
+      }
+      const file = hits[0];
+      const spin = (group) => {
+        group.children.forEach((ch) => {
+          if (ch.isGroup) ch.rotation.y += Math.PI;
+        });
+      };
+      let n = 0;
+      Object.keys(this.heroes).forEach((m) => {
+        if (VEHICLES[m] && VEHICLES[m].file === file) { spin(this.heroes[m]); n++; }
+      });
+      this.traffic.forEach((c) => {
+        if (c.obj.userData.srcFile === file) { spin(c.obj); n++; }
+      });
+      console.log('[Pakka3D] flipped ' + n + ' x ' + file +
+        ' — if that looks right, tell Claude: "' + file + ' needs flip toggled"');
+      return file;
+    }
+
+    /** List the models currently in the scene, for flipModel(). */
+    listModels() {
+      const files = Object.keys(this._rawModels || {});
+      console.log('[Pakka3D] loaded models:\n  ' + files.join('\n  '));
+      return files;
     }
 
     cycleCameraMode() {
