@@ -1615,7 +1615,11 @@
         this._laneCount = [0, 0, 0, 0];
         this.traffic.forEach(c => { this._laneCount[c.laneIdx]++; });
         this._lanePhase = [0, 0, 0, 0];
-        this._laneSpeed = [0.0062, -0.0062, 0.0078, -0.0078];
+        // Sign MUST match the lane's oncoming flag. Lanes 0 and 2 are the
+        // oncoming ones (laneIdx % 2 === 0) and face -tangent, so they must
+        // travel -t. Getting this inverted made every vehicle in every lane
+        // face one way while translating the other — i.e. driving in reverse.
+        this._laneSpeed = [-0.0062, 0.0062, -0.0078, 0.0078];
       }
       for (let L = 0; L < 4; L++) {
         this._lanePhase[L] += this._laneSpeed[L] * dt;
