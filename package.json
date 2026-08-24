@@ -1,0 +1,24 @@
+{
+  "name": "pakka-local",
+  "version": "1.0.0",
+  "description": "Pakka Local — 3D Scroll-Driven Ride & Mobility Platform",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "serve:php": "php -S localhost:8000"
+  },
+  "keywords": [
+    "threejs",
+    "webgl",
+    "rapido",
+    "taxi",
+    "php",
+    "interactive-3d",
+    "scroll-drive"
+  ],
+  "author": "Pakka Local Technologies",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer-core": "^24.43.1"
+  }
+}

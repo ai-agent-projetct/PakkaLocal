@@ -1,0 +1,22 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Browser test profiles & temporary screenshots
+edge_profile_*
+capture*.ps1
+capture*.js
+verify_*.ps1
+debug_*.js
+generate_*.js
+auto_export_all.js
+trigger_shots.js
+take_screenshots.js
+test_day_*.html
+*.png
+
+# OS metadata
+.DS_Store
+Thumbs.db
