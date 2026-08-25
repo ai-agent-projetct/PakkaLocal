@@ -197,11 +197,10 @@
   // repainted: an Indian auto is yellow, the SETC bus wears its own livery,
   // and the two delivery bikes carry brand colours.
   const NO_TINT = ['autorickshaw.glb', 'setcbus.glb', 'checkers.glb',
-                   'eskuta.glb', 'scifibike.glb'];
+                   'eskuta.glb', 'scifibike.glb', 'porsche.glb'];
 
   const PAINT_MATERIALS = {
     'dzire.glb':     /^primary$/i,
-    'porsche.glb':   /^coat$/i,
     'scorpiohp.glb': /^material_0$/i
   };
 
@@ -692,7 +691,12 @@
           widths.push((L + R) / 2);
           shiftSum += (R - L) / 2;
         }
-        const half = widths.reduce((x, y) => x + y, 0) / widths.length;
+        // Use the NARROWEST sample, not the average. A corridor that is
+        // 40m wide for most of its length but pinches to 22m at a junction
+        // will happily put a car on the footpath at that pinch if lanes are
+        // sized from the mean. The minimum is the only width that holds
+        // everywhere along the corridor.
+        const half = Math.min.apply(null, widths);
         const shift = shiftSum / (SAMPLES + 1);
         if (half < 4) return;                    // too narrow to be a road
         this.routes.push({
@@ -1277,7 +1281,6 @@
         // the vehicle you ride gets a chosen colour, not a random one
         const HERO_PAINT = {
           'dzire.glb': 0x9b1c24,      // deep red
-          'porsche.glb': 0x1d5c4a,    // racing green
           'scorpiohp.glb': 0x24272b   // graphite
         };
         if (spec.file.indexOf('pack_') === 0) {
@@ -2070,13 +2073,13 @@
         const halfW = (c.width || 2.0) / 2;
         // corridors are dead straight, so no turn-swing budget is needed
         const swing = rt ? 0 : (c.len || 3) * 0.5 * this._bendAt(c.t);
-        const margin = halfW + swing + 1.4;
+        const margin = halfW + swing + 2.2;
         const usable = Math.max(1.2, hw - margin);
         const want = c.laneFrac * usable * (c.oncoming ? -1 : 1);
         if (c.effLane === undefined) c.effLane = want;
         c.effLane += (want - c.effLane) * 0.08;
         // final guard: never exceed the measured carriageway
-        const limit = Math.max(0, hw - halfW - swing - 0.9);
+        const limit = Math.max(0, hw - halfW - swing - 1.6);
         if (c.effLane > limit) c.effLane = limit;
         if (c.effLane < -limit) c.effLane = -limit;
         c.obj.position.copy(r.pos).addScaledVector(side, c.effLane);
