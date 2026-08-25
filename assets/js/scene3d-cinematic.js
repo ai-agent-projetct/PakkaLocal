@@ -1146,6 +1146,11 @@
       const tailGeo = new THREE.SphereGeometry(0.058, 10, 8);
 
       const place = (n, geo, mat, z, y) => {
+        // n === 0 means "this vehicle carries its own lamps, add none".
+        // Without this guard 0 fell through to the pair branch and placed
+        // TWO — which is why the auto kept showing duplicate tail lamps
+        // over its own, long after its count was set to zero.
+        if (!n || n < 1) return;
         const xs = (n === 1) ? [0] : [-spec.spread / 2, spec.spread / 2];
         xs.forEach((x) => {
           const m = new THREE.Mesh(geo, mat);
@@ -1904,7 +1909,12 @@
         const hf = hv.tan.clone(); hf.y = 0;
         if (hf.lengthSq() > 1e-6) {
           hf.normalize();
-          const hl = hv.pos.clone().add(hf); hl.y = hv.pos.y;
+          // Aim from where the vehicle ACTUALLY is. Once the keep-left
+          // offset moved it ~4.6m off the centreline, a target still sitting
+          // on the centreline pointed it diagonally across the road — a 79
+          // degree yaw error, which is the bike that looked sideways.
+          const hl = this.heroGroup.position.clone().add(hf);
+          hl.y = this.heroGroup.position.y;
           this.heroGroup.lookAt(hl);
         }
         // Conform the ridden vehicle to the ground directly beneath it. The
