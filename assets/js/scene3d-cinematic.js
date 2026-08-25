@@ -100,7 +100,7 @@
     'apache.glb':   { seatY: 0.60, seatZ: -0.02, barZ: 0.27, barY: 0.84, lean: 0.34 },
     'checkers.glb': { seatY: 0.56, seatZ: -0.04, barZ: 0.25, barY: 0.82, lean: 0.10 },
     'autorickshaw.glb': { seatY: 0.34, seatZ: 0.16, barZ: 0.40, barY: 0.56, lean: 0.08 },
-    'eskuta.glb':   { seatY: 0.52, seatZ: -0.06, barZ: 0.26, barY: 0.84, lean: 0.14 },
+    'eskuta.glb':   { seatY: 0.46, seatZ: -0.02, barZ: 0.30, barY: 0.78, lean: 0.16 },
     'scooter.glb':  { seatY: 0.60, seatZ: -0.10, barZ: 0.30, barY: 0.92, lean: 0.05 }
   };
 
@@ -149,7 +149,7 @@
     // buses
     'setcbus.glb': 8
   };
-  const TRAFFIC_COUNT = 46;
+  const TRAFFIC_COUNT = 68;
 
   // Extra models loaded purely as traffic (never ridden by the player).
   const TRAFFIC_ONLY_FILES = [
@@ -215,14 +215,18 @@
    *   [x1, z1, x2, z2]
    */
   const TRAFFIC_ROUTES = [
-    [ 250,   96, -250,   96],   // long east-west boulevard
-    [ 250,    0, -105,    0],   // central east-west road
-    [ 155, -112, -210, -112],   // southern east-west road
-    [ 200,  -40, -105,  -40],   // second east-west road
-    [-208,  250, -208, -250],   // long north-south avenue (west)
-    [ -96,  135,  -96, -195],   // north-south avenue (mid-west)
-    [  24,  108,   24, -180],   // north-south avenue (mid-east)
-    [ 205,  115,  205, -250]    // north-south avenue (east)
+    // east-west carriageways
+    [ 236,  100, -236,  100],
+    [ 236,    0,  -96,    0],
+    [  20,   40, -164,   40],
+    [ -88, -200, -236, -200],
+    [ 104,  -40,   -8,  -40],
+    // north-south carriageways
+    [-100,  140, -100, -200],
+    [ 200,  104,  200, -236],
+    [  20,   92,   20, -164],
+    [  80,   20,   80, -164],
+    [ -40,  -52,  -40, -212]
   ];
 
   const BIG_VEHICLES = ['setcbus.glb', 'pack_minivan.glb', 'pack_pickup.glb'];
@@ -269,6 +273,21 @@
   const CITY_SCALE = 1.5;
 
   /**
+   * ROAD vs FOOTPATH.
+   *
+   * Sampling ground height across the drivable area gives two clean
+   * clusters 0.20 units apart — a real kerb:
+   *     y ~ -0.20  (597 samples)  asphalt carriageway
+   *     y ~  0.00  (419 samples)  raised footpath
+   * Every earlier check used |y| < 2.0, which accepts BOTH, so "is this
+   * road?" returned true for pavement and vehicles were free to drive on
+   * it. Carriageway is the LOWER surface.
+   */
+  const ROAD_Y_MAX = -0.10;    // above this is kerb/footpath
+  const ROAD_Y_MIN = -1.20;    // below this is a hole or an underpass
+  function isRoadY(y) { return y > ROAD_Y_MIN && y < ROAD_Y_MAX; }
+
+  /**
    * Legs are deliberately long. The previous route turned at z=0 and again
    * at z=-40 — two 90-degree turns just 40m apart, and the spline overshot
    * both (measured 106 and 105 degrees where it should bend 90). Back to
@@ -276,13 +295,11 @@
    * during the auto phase. Every leg here is at least 112m.
    */
   const ROUTE = [
-    [ 208, 0,  112],
-    [ 208, 0,    0],   // turn 1 — onto the z=0 road      (112m)
-    [  24, 0,    0],   // turn 2 — onto the x=24 avenue   (184m)
-    [  24, 0, -112],   // turn 3 — onto the z=-112 road   (112m)
-    [-208, 0, -112],   // turn 4 — onto the x=-208 avenue (232m)
-    [-208, 0,   96],   // turn 5 — onto the z=96 boulevard(208m)
-    [ -40, 0,   96]
+    [ 200, 0,  108],
+    [ 200, 0,    0],   // turn 1 — onto the z=0 road
+    [-100, 0,    0],   // turn 2 — onto the x=-100 avenue
+    [-100, 0, -200],   // turn 3 — onto the z=-200 road
+    [-200, 0, -200]
   ];
 
   // Roadside hoardings, carried over from the original design: each sits in
@@ -442,7 +459,7 @@
       // path swings wide and snakes back. Replacing each corner with a real
       // circular arc — cut back along both legs by RADIUS and sweep between —
       // keeps the turn at exactly 90 and the approach dead straight.
-      const RADIUS = 30 * CITY_SCALE;
+      const RADIUS = 9 * CITY_SCALE;
       const ARC_STEPS = 16;
 
       const pts = waypoints.map(w => new THREE.Vector3().fromArray(w));
@@ -526,7 +543,9 @@
         const hit = ray.intersectObjects(targets, false)[0];
         // Ignore hits high above the street — those are rooftops/awnings
         // overhanging the route, not the surface we drive on.
-        raw[i] = (hit && hit.point.y < 20) ? hit.point.y : null;
+        // only accept carriageway here: accepting the kerb let the route
+        // itself climb onto the footpath in places
+        raw[i] = (hit && isRoadY(hit.point.y)) ? hit.point.y : null;
       }
 
       // fill gaps (holes in the mesh) by carrying the last known height
@@ -576,12 +595,12 @@
       // fine sweep (240 samples x 0.5m steps to 24m) is ~23,000 raycasts
       // against 666 meshes, which locks the main thread for minutes. A
       // coarse sweep resolves the kerb line just as well for centring.
-      const MAXP = 18 * CITY_SCALE, STEP = 1.5 * CITY_SCALE;
+      const MAXP = 18 * CITY_SCALE, STEP = 2.0;
 
       const clearAt = (x, z) => {
         ray.set(new THREE.Vector3(x, 200, z), down);
         const h = ray.intersectObjects(T, false)[0];
-        return !!(h && Math.abs(h.point.y) < 2.0);
+        return !!(h && isRoadY(h.point.y));
       };
 
       const raw = new Array(N + 1);
@@ -594,15 +613,21 @@
         const pos = this.curve.getPointAt(t);
         const tan = this.curve.getTangentAt(t);
         const side = new THREE.Vector3().crossVectors(tan, up).normalize();
-        let L = 0, R = 0;
-        for (let d = STEP; d <= MAXP; d += STEP) {
-          const q = pos.clone().addScaledVector(side, d);
-          if (clearAt(q.x, q.z)) R = d; else break;
-        }
-        for (let d = STEP; d <= MAXP; d += STEP) {
-          const q = pos.clone().addScaledVector(side, -d);
-          if (clearAt(q.x, q.z)) L = d; else break;
-        }
+        const edge = (sign) => {
+          let good = 0, bad = -1;
+          for (let d = STEP; d <= MAXP; d += STEP) {
+            const q = pos.clone().addScaledVector(side, sign * d);
+            if (clearAt(q.x, q.z)) good = d; else { bad = d; break; }
+          }
+          if (bad < 0) return good;
+          for (let k = 0; k < 4; k++) {          // bisect to ~0.12 accuracy
+            const mid = (good + bad) / 2;
+            const q = pos.clone().addScaledVector(side, sign * mid);
+            if (clearAt(q.x, q.z)) good = mid; else bad = mid;
+          }
+          return good;
+        };
+        const R = edge(1), L = edge(-1);
         raw[i] = (R - L) / 2;                  // shift toward the roomier side
         // After that shift the usable half-width each side is (L+R)/2.
         // Lanes are placed as a fraction of THIS, because a fixed offset
@@ -664,7 +689,7 @@
       const isRoad = (x, z) => {
         ray.set(new THREE.Vector3(x, 200, z), down);
         const h = ray.intersectObjects(T, false)[0];
-        return !!(h && Math.abs(h.point.y) < 2.0);
+        return !!(h && isRoadY(h.point.y));
       };
 
       this.routes = [];
@@ -681,13 +706,21 @@
         let shiftSum = 0;
         for (let i = 0; i <= SAMPLES; i++) {
           const pos = curve.getPointAt(i / SAMPLES);
-          let L = 0, R = 0;
-          for (let d = 3; d <= 27; d += 3) {
-            if (isRoad(pos.x + side.x * d, pos.z + side.z * d)) R = d; else break;
-          }
-          for (let d = 3; d <= 27; d += 3) {
-            if (isRoad(pos.x - side.x * d, pos.z - side.z * d)) L = d; else break;
-          }
+          const edge = (sign) => {
+            let good = 0, bad = -1;
+            for (let d = 2; d <= 27; d += 2) {
+              if (isRoad(pos.x + side.x * sign * d, pos.z + side.z * sign * d)) good = d;
+              else { bad = d; break; }
+            }
+            if (bad < 0) return good;
+            for (let k = 0; k < 4; k++) {
+              const mid = (good + bad) / 2;
+              if (isRoad(pos.x + side.x * sign * mid, pos.z + side.z * sign * mid)) good = mid;
+              else bad = mid;
+            }
+            return good;
+          };
+          const R = edge(1), L = edge(-1);
           widths.push((L + R) / 2);
           shiftSum += (R - L) / 2;
         }
@@ -698,7 +731,7 @@
         // everywhere along the corridor.
         const half = Math.min.apply(null, widths);
         const shift = shiftSum / (SAMPLES + 1);
-        if (half < 4) return;                    // too narrow to be a road
+        if (half < 2.5) return;                  // too narrow to be a road
         this.routes.push({
           curve: curve, tan: tan, side: side,
           halfWidth: half, shift: shift,
@@ -1372,7 +1405,7 @@
         // 0.20 vs 0.42 left only ~0.7m of clearance, and forcing buses to
         // 0.16 dropped a 4.5m-wide body straight onto the inner lane.
         // 0.18 vs 0.52 gives ~4.4m of separation instead.
-        const laneFrac = outer ? 0.52 : 0.18;
+        const laneFrac = outer ? 0.58 : 0.22;
         const vb = new THREE.Box3().setFromObject(v).getSize(new THREE.Vector3());
         this.traffic.push({
           obj: v,
@@ -1419,7 +1452,7 @@
       const isRoad = (q) => {
         ray.set(new THREE.Vector3(q.x, 200, q.z), down);
         const h = ray.intersectObjects(T, false)[0];
-        return !!(h && Math.abs(h.point.y) < 2.0);
+        return !!(h && isRoadY(h.point.y));
       };
       /**
        * Walk outward to the kerb. A single non-road sample is not enough to
@@ -1907,7 +1940,7 @@
         const hUp = new THREE.Vector3(0, 1, 0);
         const hSide = new THREE.Vector3().crossVectors(hv.tan, hUp).normalize();
         const hHalf = this._halfWidthAt(this.progress);
-        const hOff = Math.min(6.5, Math.max(2.2, hHalf * 0.26));
+        const hOff = Math.min(3.2, Math.max(1.4, hHalf * 0.34));
         this.heroGroup.position.copy(hv.pos).addScaledVector(hSide, hOff);
         const hf = hv.tan.clone(); hf.y = 0;
         if (hf.lengthSq() > 1e-6) {
@@ -1943,21 +1976,26 @@
         // handlebars, mirrors and the rider's hands in shot. Only the rider's
         // own head is culled so it doesn't fill the lens.
         this.heroGroup.visible = true;
-        const rider = this.heroes[this.activeMode] &&
-                      this.heroes[this.activeMode].userData.rider;
-        if (rider) {
-          const inCockpit = (mode === 'cockpit');
-          rider.traverse((n) => {
-            if (n.userData && n.userData.isHead) n.visible = !inCockpit;
+        // Restore heads on EVERY rider, not just the active one. Culling ran
+        // only for the vehicle currently being ridden, so switching away
+        // from a bike while in cockpit view left that rider's head hidden
+        // for good — which is the headless delivery rider.
+        const inCockpit = (mode === 'cockpit');
+        Object.keys(this.heroes).forEach((k) => {
+          const rd = this.heroes[k] && this.heroes[k].userData.rider;
+          if (!rd) return;
+          const hide = inCockpit && (k === this.activeMode);
+          rd.traverse((nn) => {
+            if (nn.userData && nn.userData.isHead) nn.visible = !hide;
           });
-        }
+        });
       }
 
       const up = new THREE.Vector3(0, 1, 0);
       // camera rides with the vehicle, so it keeps left too
       const camLat = new THREE.Vector3()
         .crossVectors(tan, up).normalize()
-        .multiplyScalar(Math.min(6.5, Math.max(2.2, this._halfWidthAt(this.progress) * 0.26)));
+        .multiplyScalar(Math.min(3.2, Math.max(1.4, this._halfWidthAt(this.progress) * 0.34)));
       let camPos;
       if (mode === 'cockpit') {
         // Sit the lens where the rider's eyes are, derived from the figure
@@ -2073,13 +2111,13 @@
         const halfW = (c.width || 2.0) / 2;
         // corridors are dead straight, so no turn-swing budget is needed
         const swing = rt ? 0 : (c.len || 3) * 0.5 * this._bendAt(c.t);
-        const margin = halfW + swing + 2.2;
+        const margin = halfW + swing + 1.0;
         const usable = Math.max(1.2, hw - margin);
         const want = c.laneFrac * usable * (c.oncoming ? -1 : 1);
         if (c.effLane === undefined) c.effLane = want;
         c.effLane += (want - c.effLane) * 0.08;
         // final guard: never exceed the measured carriageway
-        const limit = Math.max(0, hw - halfW - swing - 1.6);
+        const limit = Math.max(0, hw - halfW - swing - 0.8);
         if (c.effLane > limit) c.effLane = limit;
         if (c.effLane < -limit) c.effLane = -limit;
         c.obj.position.copy(r.pos).addScaledVector(side, c.effLane);
