@@ -186,6 +186,26 @@
     0x8a6a3f, 0x6b4a2f, 0xc46a1f, 0xa8452a
   ];
 
+  /**
+   * Which material actually carries each model's paint. The generic rule —
+   * "yellow, or a material called body" — misses these, so the Dzire stayed
+   * navy and the Porsche stayed white on every single instance. Named here
+   * so they get repainted like everything else. Models whose paint shares a
+   * texture with their glass and trim are deliberately absent: tinting those
+   * would colour the windows too.
+   */
+  // Vehicles whose colour is part of their identity and must not be
+  // repainted: an Indian auto is yellow, the SETC bus wears its own livery,
+  // and the two delivery bikes carry brand colours.
+  const NO_TINT = ['autorickshaw.glb', 'setcbus.glb', 'checkers.glb',
+                   'eskuta.glb', 'scifibike.glb'];
+
+  const PAINT_MATERIALS = {
+    'dzire.glb':     /^primary$/i,
+    'porsche.glb':   /^coat$/i,
+    'scorpiohp.glb': /^material_0$/i
+  };
+
   const BIG_VEHICLES = ['setcbus.glb', 'pack_minivan.glb', 'pack_pickup.glb'];
 
   /**
@@ -1043,23 +1063,67 @@
      * all. Only large, strongly-yellow surfaces are touched, which leaves
      * glass, tyres, lights and trim alone.
      */
-    _tintBody(group, colour) {
+    _tintBody(group, colour, file) {
+      if (file && NO_TINT.indexOf(file) !== -1) return;
+      // Excluded by name: anything that must keep its own colour.
+      const KEEP = /glass|window|windscreen|screen|tyre|tire|wheel|rim|chrome|mirror|plate|light|lamp|interior|seat|dash|grill|grille|bumper|trim|rubber|shadow|sticker/i;
+
+      // Pass 1: gather candidate paint materials with their surface area.
+      const cand = new Map();
+      group.traverse((o) => {
+        if (!o.isMesh || !o.geometry || !o.material) return;
+        const g = o.geometry;
+        if (!g.boundingBox) g.computeBoundingBox();
+        const sz = g.boundingBox.getSize(new THREE.Vector3());
+        const area = 2 * (sz.x * sz.y + sz.y * sz.z + sz.z * sz.x);
+        [].concat(o.material).forEach((m) => {
+          if (!m || !m.color) return;
+          // Never tint a textured material: the colour multiplies the map,
+          // so it would stain the windows and badges too.
+          if (m.map) return;
+          const name = m.name || '';
+          if (KEEP.test(name)) return;
+          cand.set(m, (cand.get(m) || 0) + area);
+        });
+      });
+      if (!cand.size) return;
+
       const hsl = {};
+      const paintRe = file && PAINT_MATERIALS[file];
+      const wanted = new Set();
+      cand.forEach((area, m) => {
+        m.color.getHSL(hsl);
+        const yellow = hsl.h * 360 >= 40 && hsl.h * 360 <= 70 &&
+                       hsl.s > 0.35 && hsl.l > 0.25;
+        if (yellow) wanted.add(m);
+        if (/body|paint|carpaint/i.test(m.name || '')) wanted.add(m);
+        if (paintRe && paintRe.test(m.name || '')) wanted.add(m);
+      });
+      // Fallback: nothing matched by name or colour, so take the material
+      // covering the most surface. This is what finally catches the plain
+      // white pack bodies, whose paint material is simply called "Body".
+      if (!wanted.size) {
+        let best = null, bestArea = -1;
+        cand.forEach((area, m) => { if (area > bestArea) { bestArea = area; best = m; } });
+        if (best) wanted.add(best);
+      }
+
+      // Pass 2: clone before tinting — materials are shared between clones,
+      // so recolouring in place would repaint every copy of the model.
+      const swap = new Map();
       group.traverse((o) => {
         if (!o.isMesh || !o.material) return;
         const mats = [].concat(o.material);
         const out = mats.map((m) => {
-          if (!m || !m.color) return m;
-          m.color.getHSL(hsl);
-          const isYellow = hsl.h * 360 >= 40 && hsl.h * 360 <= 70 &&
-                           hsl.s > 0.35 && hsl.l > 0.25;
-          const isBodyMat = /body/i.test(m.name || '');
-          if (!isYellow && !isBodyMat) return m;
-          const c = m.clone();
-          c.color = new THREE.Color(colour);
-          if (c.metalness !== undefined) c.metalness = 0.65;
-          if (c.roughness !== undefined) c.roughness = 0.34;
-          return c;
+          if (!wanted.has(m)) return m;
+          if (!swap.has(m)) {
+            const c = m.clone();
+            c.color = new THREE.Color(colour);
+            if (c.metalness !== undefined) c.metalness = 0.62;
+            if (c.roughness !== undefined) c.roughness = 0.34;
+            swap.set(m, c);
+          }
+          return swap.get(m);
         });
         o.material = Array.isArray(o.material) ? out : out[0];
       });
@@ -1100,7 +1164,17 @@
         const src = this._rawModels[spec.file];
         if (!src) return;
         const inst = this._normalize(src.clone(true), spec.length, spec.file);
-        if (spec.file.indexOf('pack_') === 0) this._tintBody(inst, 0x2b3a55);
+        // the vehicle you ride gets a chosen colour, not a random one
+        const HERO_PAINT = {
+          'dzire.glb': 0x9b1c24,      // deep red
+          'porsche.glb': 0x1d5c4a,    // racing green
+          'scorpiohp.glb': 0x24272b   // graphite
+        };
+        if (spec.file.indexOf('pack_') === 0) {
+          this._tintBody(inst, 0x2b3a55, spec.file);
+        } else if (HERO_PAINT[spec.file] !== undefined) {
+          this._tintBody(inst, HERO_PAINT[spec.file], spec.file);
+        }
         this._mountLamps(inst, spec.file);
         this._mountRider(inst, RIDER_FOR[spec.file] || 'none', 0xd4af37, spec.file);
         inst.visible = (mode === this.activeMode);
@@ -1146,7 +1220,7 @@
         // vary helmet/jacket colour so the traffic doesn't look cloned
         const tints = [0xd4af37, 0xc0392b, 0x2e6fb7, 0xe8e8ea, 0x2f8f5b];
         // repaint before lamps/rider so their materials are not touched
-        this._tintBody(v, CAR_COLOURS[Math.floor(Math.random() * CAR_COLOURS.length)]);
+        this._tintBody(v, CAR_COLOURS[Math.floor(Math.random() * CAR_COLOURS.length)], file);
         this._mountLamps(v, file);
         this._mountRider(v, RIDER_FOR[file] || 'none', tints[i % tints.length], file);
 
