@@ -1890,9 +1890,17 @@
       const mode = this.cameraModes[this.cameraMode];
 
       if (this.heroGroup) {
+        // keep-left offset, applied below once the route frame is known
         const lead = (mode === 'cockpit') ? 0.0 : 0.010;
         const hv = this._routeAt(this.progress + lead);
-        this.heroGroup.position.copy(hv.pos);
+        // India drives on the LEFT: sit the ridden vehicle in the near-side
+        // lane rather than straddling the centre line, so oncoming traffic
+        // passes on the right the way it should.
+        const hUp = new THREE.Vector3(0, 1, 0);
+        const hSide = new THREE.Vector3().crossVectors(hv.tan, hUp).normalize();
+        const hHalf = this._halfWidthAt(this.progress);
+        const hOff = Math.min(6.5, Math.max(2.2, hHalf * 0.26));
+        this.heroGroup.position.copy(hv.pos).addScaledVector(hSide, hOff);
         const hf = hv.tan.clone(); hf.y = 0;
         if (hf.lengthSq() > 1e-6) {
           hf.normalize();
@@ -1933,6 +1941,10 @@
       }
 
       const up = new THREE.Vector3(0, 1, 0);
+      // camera rides with the vehicle, so it keeps left too
+      const camLat = new THREE.Vector3()
+        .crossVectors(tan, up).normalize()
+        .multiplyScalar(Math.min(6.5, Math.max(2.2, this._halfWidthAt(this.progress) * 0.26)));
       let camPos;
       if (mode === 'cockpit') {
         // Sit the lens where the rider's eyes are, derived from the figure
@@ -1960,8 +1972,10 @@
       camPos.add(side.clone().multiplyScalar(this.mouse.x * 1.1));
       camPos.y += -this.mouse.y * 0.7;
 
+      camPos.add(camLat);
       this.camera.position.lerp(camPos, 0.18);
       if (!this._lookTarget) this._lookTarget = look.clone();
+      look.add(camLat);
       this._lookTarget.lerp(look, 0.14);
       this.camera.lookAt(this._lookTarget);
 

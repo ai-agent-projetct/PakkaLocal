@@ -1,3 +1,14 @@
+
+// PAKKA_CACHE_BUST
+// Every build shipped assets at the SAME url (?v=17.0), so browsers kept
+// serving a cached scene3d-cinematic.js from many versions earlier and the
+// page looked unchanged no matter what was fixed. Stamp the build time.
+function bustCache(html) {
+    const stamp = Date.now().toString(36);
+    return html.replace(/(src|href)="(assets\/[^"]+?)(\?v=[^"]*)?"/g,
+        (m, attr, path) => `${attr}="${path}?v=${stamp}"`);
+}
+
 const fs = require('fs');
 const path = require('path');
 
@@ -70,6 +81,7 @@ function compilePhpToHtml(filename, outputName) {
     html = html.replace(/href="blog\.php"/g, 'href="blog.html"');
     html = html.replace(/href="contact\.php"/g, 'href="contact.html"');
 
+    html = bustCache(html);
     fs.writeFileSync(path.join(baseDir, outputName), html, 'utf8');
     console.log(`✓ ${outputName} generated successfully! (${html.length} bytes)`);
 }
