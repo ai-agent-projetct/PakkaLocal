@@ -144,7 +144,7 @@
     'pack_offroad.glb': 2, 'pack_suv.glb': 2, 'pack_pickup.glb': 2,
     'pack_car8.glb': 2,
     // other hero-grade cars seen in traffic too
-    'sedan.glb': 3, 'xuv3xo.glb': 3, 'scorpiohp.glb': 3, 'dzire.glb': 4,
+    'scorpiohp.glb': 3, 'dzire.glb': 4,
     'porsche.glb': 2,
     // buses
     'setcbus.glb': 8
@@ -153,8 +153,7 @@
 
   // Extra models loaded purely as traffic (never ridden by the player).
   const TRAFFIC_ONLY_FILES = [
-    'setcbus.glb', 'sedan.glb', 'scorpiohp.glb', 'checkers.glb', 'dzire.glb',
-    'porsche.glb', 'xuv3xo.glb',
+    'setcbus.glb', 'scorpiohp.glb', 'checkers.glb', 'dzire.glb', 'porsche.glb',
     'pack_sedan.glb', 'pack_hatchback.glb', 'pack_compact.glb',
     'pack_coupe.glb', 'pack_wagon.glb', 'pack_minivan.glb',
     'pack_offroad.glb', 'pack_suv.glb', 'pack_pickup.glb', 'pack_car8.glb'
@@ -205,6 +204,27 @@
     'porsche.glb':   /^coat$/i,
     'scorpiohp.glb': /^material_0$/i
   };
+
+  /**
+   * The wider road network that ambient traffic drives on.
+   *
+   * Traffic used to share the camera's single spline, so the rest of the
+   * city was dead and every vehicle you ever saw was on your own road.
+   * These are straight corridors in unscaled city coordinates, each one
+   * taken from the raycast road-mask survey (the same survey that chose the
+   * camera route), so all of them are real carriageway end to end.
+   *   [x1, z1, x2, z2]
+   */
+  const TRAFFIC_ROUTES = [
+    [ 250,   96, -250,   96],   // long east-west boulevard
+    [ 250,    0, -105,    0],   // central east-west road
+    [ 155, -112, -210, -112],   // southern east-west road
+    [ 200,  -40, -105,  -40],   // second east-west road
+    [-208,  250, -208, -250],   // long north-south avenue (west)
+    [ -96,  135,  -96, -195],   // north-south avenue (mid-west)
+    [  24,  108,   24, -180],   // north-south avenue (mid-east)
+    [ 205,  115,  205, -250]    // north-south avenue (east)
+  ];
 
   const BIG_VEHICLES = ['setcbus.glb', 'pack_minivan.glb', 'pack_pickup.glb'];
 
@@ -294,7 +314,7 @@
   ];
 
   const EYE_HEIGHT = 1.55;
-  const DPR_CAP = 2;
+  const DPR_CAP = 1.6;
 
   class PakkaCinematic3D {
     constructor() {
@@ -342,10 +362,12 @@
     _setupRenderer() {
       const r = new THREE.WebGLRenderer({
         canvas: this.canvas, antialias: true, alpha: false,
-        powerPreference: 'high-performance', stencil: false
+        powerPreference: 'high-performance', stencil: false,
+        logarithmicDepthBuffer: true
       });
       r.setSize(window.innerWidth, window.innerHeight);
       r.setPixelRatio(Math.min(window.devicePixelRatio, DPR_CAP));
+      r.shadowMap.autoUpdate = true;
       r.outputColorSpace = THREE.SRGBColorSpace;
       // AgX is what Blender 4.x uses by default — matches the look of the
       // cinematic-city references without hand-tuned grading.
@@ -358,8 +380,13 @@
 
     _setupScene() {
       this.scene = new THREE.Scene();
+      // Depth precision is governed by the near:far RATIO, not far alone.
+      // 0.1 to 2200 is 22,000:1 and leaves so few bits at distance that
+      // road and building faces flicker through one another. Pulling near
+      // out to 0.6 gives ~6x the precision, and a logarithmic depth buffer
+      // removes the remaining fighting on the far skyline.
       this.camera = new THREE.PerspectiveCamera(
-        58, window.innerWidth / window.innerHeight, 0.1, 2200);
+        58, window.innerWidth / window.innerHeight, 0.6, 1800);
       this.camera.position.set(ROUTE[0][0], EYE_HEIGHT, ROUTE[0][2]);
 
       // Image-based lighting from a procedural room — gives every PBR
@@ -374,10 +401,10 @@
       this.sun = new THREE.DirectionalLight(0xffd9a0, 2.2);
       this.sun.position.set(-120, 160, -80);
       this.sun.castShadow = true;
-      this.sun.shadow.mapSize.set(2048, 2048);
+      this.sun.shadow.mapSize.set(1024, 1024);
       this.sun.shadow.camera.near = 1;
       this.sun.shadow.camera.far = 600;
-      const S = 140;
+      const S = 90;
       this.sun.shadow.camera.left = -S;
       this.sun.shadow.camera.right = S;
       this.sun.shadow.camera.top = S;
@@ -560,6 +587,8 @@
 
       const raw = new Array(N + 1);
       const halfRaw = new Array(N + 1);
+      const leftRaw = new Array(N + 1);
+      const rightRaw = new Array(N + 1);
       let widest = 0;
       for (let i = 0; i <= N; i++) {
         const t = i / N;
@@ -581,6 +610,9 @@
         // that fits a 48m boulevard puts vehicles on the footpath where
         // the carriageway narrows to 16m.
         halfRaw[i] = (L + R) / 2;
+        // after the centring shift, each side has (L+R)/2 of room
+        leftRaw[i] = (L + R) / 2;
+        rightRaw[i] = (L + R) / 2;
         widest = Math.max(widest, L + R);
       }
 
@@ -607,6 +639,8 @@
         hw[i] = acc / cnt;
       }
       this.halfWidthProfile = hw;
+      this.leftWidthProfile = hw;
+      this.rightWidthProfile = hw;
       console.log('[Pakka3D] carriageway half-width ' +
         Math.min.apply(null, hw).toFixed(1) + '..' +
         Math.max.apply(null, hw).toFixed(1) + 'm');
@@ -617,6 +651,72 @@
     }
 
     /** Usable half-width of carriageway at t, in metres. */
+    /**
+     * Turn each corridor into a drivable route: a straight curve plus its
+     * own measured half-width, so lane clamping works on these exactly as
+     * it does on the camera route. Measured once at load; nothing here
+     * costs anything per frame.
+     */
+    _buildTrafficNetwork() {
+      const ray = new THREE.Raycaster();
+      const T = this._cityTargets || [];
+      const down = new THREE.Vector3(0, -1, 0);
+      const up = new THREE.Vector3(0, 1, 0);
+      const isRoad = (x, z) => {
+        ray.set(new THREE.Vector3(x, 200, z), down);
+        const h = ray.intersectObjects(T, false)[0];
+        return !!(h && Math.abs(h.point.y) < 2.0);
+      };
+
+      this.routes = [];
+      const SAMPLES = 5;
+      TRAFFIC_ROUTES.forEach((seg) => {
+        const a = new THREE.Vector3(seg[0] * CITY_SCALE, 0, seg[1] * CITY_SCALE);
+        const b = new THREE.Vector3(seg[2] * CITY_SCALE, 0, seg[3] * CITY_SCALE);
+        const curve = new THREE.LineCurve3(a, b);
+        const tan = b.clone().sub(a).normalize();
+        const side = new THREE.Vector3().crossVectors(tan, up).normalize();
+
+        // measure the carriageway either side, then centre the corridor
+        const widths = [];
+        let shiftSum = 0;
+        for (let i = 0; i <= SAMPLES; i++) {
+          const pos = curve.getPointAt(i / SAMPLES);
+          let L = 0, R = 0;
+          for (let d = 3; d <= 27; d += 3) {
+            if (isRoad(pos.x + side.x * d, pos.z + side.z * d)) R = d; else break;
+          }
+          for (let d = 3; d <= 27; d += 3) {
+            if (isRoad(pos.x - side.x * d, pos.z - side.z * d)) L = d; else break;
+          }
+          widths.push((L + R) / 2);
+          shiftSum += (R - L) / 2;
+        }
+        const half = widths.reduce((x, y) => x + y, 0) / widths.length;
+        const shift = shiftSum / (SAMPLES + 1);
+        if (half < 4) return;                    // too narrow to be a road
+        this.routes.push({
+          curve: curve, tan: tan, side: side,
+          halfWidth: half, shift: shift,
+          length: a.distanceTo(b),
+          phase: [Math.random(), Math.random(), Math.random(), Math.random()],
+          count: [0, 0, 0, 0]
+        });
+      });
+      console.log('[Pakka3D] traffic network: ' + this.routes.length +
+        ' corridors, widths ' +
+        this.routes.map(r => r.halfWidth.toFixed(0)).join('/') + 'm');
+    }
+
+    /** 0 on a straight, ~1 in the tightest bend — scales the swing budget. */
+    _bendAt(t) {
+      if (!this.curve) return 0;
+      const d = 0.012;
+      const a = this.curve.getTangentAt(Math.max(0, Math.min(1, t - d)));
+      const b = this.curve.getTangentAt(Math.max(0, Math.min(1, t + d)));
+      return Math.min(1, a.angleTo(b) / 0.9);
+    }
+
     _halfWidthAt(t) {
       const h = this.halfWidthProfile;
       if (!h) return 7.0;
@@ -694,6 +794,9 @@
       this._rawModels = loaded;
 
       this._buildHeroVehicle();
+      // must precede _buildTraffic: vehicles claim a corridor and a lane
+      // slot on it as they are created
+      this._buildTrafficNetwork();
       this._buildTraffic();
       this._buildBillboards();
       this._buildStreetFurniture();
@@ -767,7 +870,7 @@
         const mats = [].concat(o.material || []);
         mats.forEach((m) => {
           if (!m) return;
-          if (m.map) m.map.anisotropy = 8;
+          if (m.map) m.map.anisotropy = 4;
           // Buildings arrive fully rough; a touch of spec makes glass and
           // wet asphalt catch the sun instead of reading as flat paper.
           if (m.roughness !== undefined && m.roughness > 0.92) m.roughness = 0.72;
@@ -861,7 +964,9 @@
 
       group.traverse((o) => {
         if (!o.isMesh) return;
-        o.castShadow = true;
+        // receive, but do not cast: 46 shadow-casting vehicles cost far more
+        // than the contact shadows they contributed at this camera distance
+        o.castShadow = false;
         o.receiveShadow = true;
         [].concat(o.material || []).forEach((m) => {
           if (!m) return;
@@ -1236,8 +1341,14 @@
         const oncoming = (laneIdx % 2 === 0);
         const outer = laneIdx >= 2;
 
-        this._laneSlots = this._laneSlots || [0, 0, 0, 0];
-        const slot = this._laneSlots[laneIdx]++;
+        // Spread across the whole network rather than the camera's spline:
+        // each vehicle claims a corridor and takes a slot in one of that
+        // corridor's four lane queues, so the rest of the city has traffic
+        // on it too instead of only the road you happen to be driving.
+        const routeIdx = (this.routes && this.routes.length)
+          ? (i % this.routes.length) : -1;
+        const rt = (routeIdx >= 0) ? this.routes[routeIdx] : null;
+        const slot = rt ? rt.count[laneIdx]++ : 0;
 
         // inner lane at 32% of usable half-width, outer at 68%
         // An 11m bus sweeps a much wider arc through a 90-degree turn than
@@ -1260,6 +1371,7 @@
           oncoming: oncoming,
           laneIdx: laneIdx,
           slot: slot,
+          routeIdx: routeIdx,
           len: len,
           big: big,
           width: Math.min(vb.x, vb.z),
@@ -1393,7 +1505,7 @@
         const post = new THREE.Mesh(
           new THREE.CylinderGeometry(0.30, 0.40, postH, 14), postMat);
         post.position.set(mountX, postH / 2, 0);
-        post.castShadow = true;
+        post.castShadow = false;
         g.add(post);
 
         // arm reaching from the mast out over the carriageway
@@ -1506,7 +1618,7 @@
 
         const pole = new THREE.Mesh(poleGeo, poleMat);
         pole.position.y = 4.1;
-        pole.castShadow = true;
+        pole.castShadow = false;
         g.add(pole);
         const arm = new THREE.Mesh(armGeo, poleMat);
         arm.position.set(-side * 1.1, 8.0, 0);
@@ -1872,22 +1984,34 @@
       const up = new THREE.Vector3(0, 1, 0);
       this._clearCheckCursor = this._clearCheckCursor || 0;
 
-      // One shared phase per lane. Vehicles ride fixed, evenly spaced slots
-      // off that phase, so spacing is constant and collisions are impossible.
-      if (!this._laneCount) {
-        this._laneCount = [0, 0, 0, 0];
-        this.traffic.forEach(c => { this._laneCount[c.laneIdx]++; });
-        this._lanePhase = [0, 0, 0, 0];
+      // One shared phase per lane, PER CORRIDOR. Vehicles ride fixed, evenly
+      // spaced slots off their own corridor's phase, so spacing within a
+      // lane is constant and same-lane collisions cannot happen.
+      if (!this._laneSpeed) {
         // Sign MUST match the lane's oncoming flag. Lanes 0 and 2 are the
         // oncoming ones (laneIdx % 2 === 0) and face -tangent, so they must
         // travel -t. Getting this inverted made every vehicle in every lane
         // face one way while translating the other — i.e. driving in reverse.
         this._laneSpeed = [-0.0062, 0.0062, -0.0078, 0.0078];
+        this._laneCount = [0, 0, 0, 0];
+        this.traffic.forEach(c => { this._laneCount[c.laneIdx]++; });
+        this._lanePhase = [0, 0, 0, 0];
       }
       for (let L = 0; L < 4; L++) {
         this._lanePhase[L] += this._laneSpeed[L] * dt;
         if (this._lanePhase[L] > 1) this._lanePhase[L] -= 1;
         if (this._lanePhase[L] < 0) this._lanePhase[L] += 1;
+      }
+      if (this.routes) {
+        this.routes.forEach((rt) => {
+          for (let L = 0; L < 4; L++) {
+            // shorter corridors advance faster in t so real speed stays even
+            const k = 900 / Math.max(200, rt.length);
+            rt.phase[L] += this._laneSpeed[L] * k * dt;
+            if (rt.phase[L] > 1) rt.phase[L] -= 1;
+            if (rt.phase[L] < 0) rt.phase[L] += 1;
+          }
+        });
       }
 
       for (let i = 0; i < this.traffic.length; i++) {
@@ -1897,39 +2021,44 @@
         // carriageway is better read as parked at the kerb than as traffic
         // driving along the footpath, so it stops rather than trespassing.
         if (c.parked) continue;
-        const n = Math.max(1, this._laneCount[c.laneIdx]);
-        c.t = this._lanePhase[c.laneIdx] + c.slot / n;
+        const rt = (c.routeIdx >= 0 && this.routes) ? this.routes[c.routeIdx] : null;
+        const n = Math.max(1, rt ? rt.count[c.laneIdx] : this._laneCount[c.laneIdx]);
+        c.t = (rt ? rt.phase[c.laneIdx] : this._lanePhase[c.laneIdx]) + c.slot / n;
         if (c.t > 1) c.t -= 1;
         if (c.t < 0) c.t += 1;
-        const r = this._routeAt(c.t);
-        const side = new THREE.Vector3().crossVectors(r.tan, up).normalize();
+        const r = rt
+          ? { pos: rt.curve.getPointAt(c.t).clone().addScaledVector(rt.side, rt.shift),
+              tan: rt.tan }
+          : this._routeAt(c.t);
+        const side = rt ? rt.side : new THREE.Vector3().crossVectors(r.tan, up).normalize();
         // Lane offset is a FRACTION of the measured carriageway here, not a
         // fixed distance. A constant 6.4m outer lane fits the 48m boulevard
         // but sits on the footpath where the road narrows to 16m — which is
         // how traffic ended up driving on the walkway.
-        const hw = this._halfWidthAt(c.t);
-        const margin = (c.width || 2.0) / 2 + 1.1;      // keep the body inside
-        const usable = Math.max(1.6, hw - margin);
+        // Hard geometric clamp instead of probe-and-correct.
+        //
+        // A turning vehicle sweeps a wider band than its width: the corner
+        // of a long body swings out by roughly half its LENGTH on a bend.
+        // Budget for that and a vehicle can never put a corner over the
+        // kerb, which is what the raycast guard was only ever catching
+        // after the fact.
+        const hw = rt ? rt.halfWidth : this._halfWidthAt(c.t);
+        const halfW = (c.width || 2.0) / 2;
+        // corridors are dead straight, so no turn-swing budget is needed
+        const swing = rt ? 0 : (c.len || 3) * 0.5 * this._bendAt(c.t);
+        const margin = halfW + swing + 1.4;
+        const usable = Math.max(1.2, hw - margin);
         const want = c.laneFrac * usable * (c.oncoming ? -1 : 1);
         if (c.effLane === undefined) c.effLane = want;
-        // ease so a narrowing road pulls vehicles in smoothly
         c.effLane += (want - c.effLane) * 0.08;
+        // final guard: never exceed the measured carriageway
+        const limit = Math.max(0, hw - halfW - swing - 0.9);
+        if (c.effLane > limit) c.effLane = limit;
+        if (c.effLane < -limit) c.effLane = -limit;
         c.obj.position.copy(r.pos).addScaledVector(side, c.effLane);
-        // A vehicle offset into a lane stands over ground that may be higher
-        // than the route centreline (the footpath is a raised kerb). Riding
-        // the route's own height there buries the body in the pavement and
-        // leaves only the emissive lamps showing above the surface — which
-        // is exactly what the recording showed. Ride this vehicle's OWN
-        // measured ground instead, eased so kerbs don't cause a jolt.
-        if (c.groundY !== undefined) {
-          // Ease slowly and cap the per-frame step. At 0.25 the vehicle
-          // chased every kerb the probe hit, which read as the auto bobbing
-          // up and down through the turns.
-          if (c.rideY === undefined) c.rideY = c.groundY;
-          const step = (c.groundY - c.rideY) * 0.06;
-          c.rideY += Math.max(-0.05, Math.min(0.05, step));
-          c.obj.position.y = c.rideY;
-        }
+        // Height comes from the route's own ground profile, which measures
+        // -0.1..0.0 across the whole drive — flat enough that a per-vehicle
+        // ground probe bought nothing and cost a raycast every frame.
         // Face along the road but stay LEVEL: feeding lookAt a target with a
         // different height pitches the whole vehicle, which is why traffic
         // looked tilted rather than sitting flat on the road.
@@ -1943,74 +2072,11 @@
         }
       }
 
-      // Only the route centreline is verified clear; a fixed lane offset
-      // still buries cars where the avenue narrows or the spline swings
-      // through the turn. Rather than raycast all 16 every frame, probe one
-      // per frame round-robin and adapt ITS lane: pull toward the centreline
-      // when blocked, drift back out to the nominal lane when clear. This
-      // settles to the widest offset that stays on the carriageway.
-      // Probe several per frame so a fleet of 30 is swept in ~7 frames; at
-      // one per frame a mis-laned vehicle stayed visible inside a building
-      // for half a second before the guard caught it.
-      if (this.traffic.length && this._cityTargets) {
-        this._ray = this._ray || new THREE.Raycaster();
-        const down = new THREE.Vector3(0, -1, 0);
-        const PER_FRAME = 8;
-        for (let k = 0; k < PER_FRAME; k++) {
-          const c = this.traffic[this._clearCheckCursor % this.traffic.length];
-          this._clearCheckCursor++;
-          const pos = c.obj.position;
-
-          // Probe the OUTER FRONT CORNER, not the centre. A vehicle can sit
-          // centred on tarmac while its outer corner overhangs the kerb —
-          // that is what still put four of them on the footpath.
-          const sgn = (c.effLane >= 0) ? 1 : -1;
-          const fwdV = new THREE.Vector3(0, 0, 1).applyQuaternion(c.obj.quaternion);
-          const sideV = new THREE.Vector3(1, 0, 0).applyQuaternion(c.obj.quaternion);
-          const corner = pos.clone()
-            .addScaledVector(fwdV, (c.len || 3) / 2)
-            .addScaledVector(sideV, sgn * ((c.width || 2) / 2 + 0.35));
-          this._ray.set(new THREE.Vector3(corner.x, 200, corner.z), down);
-          const cHit = this._ray.intersectObjects(this._cityTargets, false)[0];
-          const cornerOffRoad = !cHit || Math.abs(cHit.point.y - pos.y) > 1.2;
-          if (cornerOffRoad) {
-            const floor = (c.laneIdx >= 2) ? 0.44 : 0.10;
-            c.laneFrac = Math.max(floor, c.laneFrac * 0.82);
-            // If pulling in repeatedly fails to get it back on the road,
-            // park it rather than let it keep driving along the footpath.
-            c.strikes = (c.strikes || 0) + 1;
-            if (c.strikes > 6 && !c.parked) {
-              c.parked = true;
-              c.obj.visible = true;
-              // pull it clear of the running lane, or the vehicles still
-              // moving in that lane will drive straight through it
-              c.laneFrac = 0.80;
-              this._parkedCount = (this._parkedCount || 0) + 1;
-            }
-          } else if (c.strikes) {
-            c.strikes--;
-          }
-
-          this._ray.set(new THREE.Vector3(pos.x, 140, pos.z), down);
-          const hit = this._ray.intersectObjects(this._cityTargets, false)[0];
-          // remember this vehicle's own surface height for ground-conforming
-          if (hit) c.groundY = hit.point.y;
-          // "blocked" means real structure overhead, not merely a kerb a few
-          // centimetres up — a 2m threshold treated the footpath as a wall.
-          const blocked = (hit && hit.point.y > pos.y + 2.5);
-          // Lanes are already derived from the measured carriageway, so a
-          // block here means a local obstruction: tighten this vehicle's
-          // lane fraction toward the centreline and let it relax back.
-          if (blocked) {
-            const floor = (c.laneIdx >= 2) ? 0.44 : 0.12;
-            c.laneFrac = Math.max(floor, c.laneFrac * 0.7);
-          } else {
-            const target = (c.laneIdx >= 2) ? 0.52 : 0.18;
-            c.laneFrac += (target - c.laneFrac) * 0.05;
-          }
-          c.obj.visible = !blocked;
-        }
-      }
+      // NOTE: this loop used to raycast 8 vehicles per frame against all
+      // 666 city meshes (17 casts/frame once the hero and corner probes are
+      // counted), which was the main source of stutter. The carriageway
+      // width is measured once at load, so containment is now an O(1)
+      // lookup and no raycasting happens per frame at all.
     }
   }
 
