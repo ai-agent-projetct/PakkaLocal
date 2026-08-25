@@ -144,15 +144,17 @@
     'pack_offroad.glb': 2, 'pack_suv.glb': 2, 'pack_pickup.glb': 2,
     'pack_car8.glb': 2,
     // other hero-grade cars seen in traffic too
-    'sedan.glb': 2, 'xuv3xo.glb': 2, 'scorpiohp.glb': 2, 'dzire.glb': 3,
+    'sedan.glb': 3, 'xuv3xo.glb': 3, 'scorpiohp.glb': 3, 'dzire.glb': 4,
+    'porsche.glb': 2,
     // buses
     'setcbus.glb': 8
   };
-  const TRAFFIC_COUNT = 38;
+  const TRAFFIC_COUNT = 46;
 
   // Extra models loaded purely as traffic (never ridden by the player).
   const TRAFFIC_ONLY_FILES = [
     'setcbus.glb', 'sedan.glb', 'scorpiohp.glb', 'checkers.glb', 'dzire.glb',
+    'porsche.glb', 'xuv3xo.glb',
     'pack_sedan.glb', 'pack_hatchback.glb', 'pack_compact.glb',
     'pack_coupe.glb', 'pack_wagon.glb', 'pack_minivan.glb',
     'pack_offroad.glb', 'pack_suv.glb', 'pack_pickup.glb', 'pack_car8.glb'
@@ -174,6 +176,15 @@
   // True overall height in metres, used to stop badly-proportioned sources
   // scaling into skyscrapers when normalised by length alone.
   const VEHICLE_HEIGHTS = { 'setcbus.glb': 3.30 };
+
+  // Real-world car colours, deliberately excluding yellow. Applied per
+  // instance so the same model appears in several colours and the street
+  // reads as many more distinct cars than there are model files.
+  const CAR_COLOURS = [
+    0xf2f2f4, 0xd9dcdf, 0x9aa0a6, 0x5b6067, 0x24272b, 0x101215,
+    0xb02a2a, 0x7d1c26, 0x1f4f8f, 0x24608f, 0x1d5c4a, 0x2f6b46,
+    0x8a6a3f, 0x6b4a2f, 0xc46a1f, 0xa8452a
+  ];
 
   const BIG_VEHICLES = ['setcbus.glb', 'pack_minivan.glb', 'pack_pickup.glb'];
 
@@ -1022,6 +1033,38 @@
       place(spec.rear,  tailGeo, this._lampMats.tail, -halfLen * 0.94, h * spec.rearY);
     }
 
+    /**
+     * Repaint a vehicle's bodywork.
+     *
+     * Six of the pack models ship in the same pure yellow (#fffe00) — both
+     * SUVs among them — so the street read as a fleet of identical yellow
+     * cars. Materials are shared between clones, so each instance gets its
+     * own copy before being tinted; otherwise recolouring one repaints them
+     * all. Only large, strongly-yellow surfaces are touched, which leaves
+     * glass, tyres, lights and trim alone.
+     */
+    _tintBody(group, colour) {
+      const hsl = {};
+      group.traverse((o) => {
+        if (!o.isMesh || !o.material) return;
+        const mats = [].concat(o.material);
+        const out = mats.map((m) => {
+          if (!m || !m.color) return m;
+          m.color.getHSL(hsl);
+          const isYellow = hsl.h * 360 >= 40 && hsl.h * 360 <= 70 &&
+                           hsl.s > 0.35 && hsl.l > 0.25;
+          const isBodyMat = /body/i.test(m.name || '');
+          if (!isYellow && !isBodyMat) return m;
+          const c = m.clone();
+          c.color = new THREE.Color(colour);
+          if (c.metalness !== undefined) c.metalness = 0.65;
+          if (c.roughness !== undefined) c.roughness = 0.34;
+          return c;
+        });
+        o.material = Array.isArray(o.material) ? out : out[0];
+      });
+    }
+
     /** Attach a rider to a normalised vehicle group, if its type takes one. */
     _mountRider(group, kind, tint, file) {
       if (kind === 'none') return;
@@ -1057,6 +1100,7 @@
         const src = this._rawModels[spec.file];
         if (!src) return;
         const inst = this._normalize(src.clone(true), spec.length, spec.file);
+        if (spec.file.indexOf('pack_') === 0) this._tintBody(inst, 0x2b3a55);
         this._mountLamps(inst, spec.file);
         this._mountRider(inst, RIDER_FOR[spec.file] || 'none', 0xd4af37, spec.file);
         inst.visible = (mode === this.activeMode);
@@ -1101,6 +1145,8 @@
         const v = this._normalize(src.clone(true), len, file, VEHICLE_HEIGHTS[file]);
         // vary helmet/jacket colour so the traffic doesn't look cloned
         const tints = [0xd4af37, 0xc0392b, 0x2e6fb7, 0xe8e8ea, 0x2f8f5b];
+        // repaint before lamps/rider so their materials are not touched
+        this._tintBody(v, CAR_COLOURS[Math.floor(Math.random() * CAR_COLOURS.length)]);
         this._mountLamps(v, file);
         this._mountRider(v, RIDER_FOR[file] || 'none', tints[i % tints.length], file);
 
