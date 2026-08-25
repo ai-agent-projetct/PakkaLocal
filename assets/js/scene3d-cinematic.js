@@ -224,7 +224,7 @@
     // north-south carriageways
     [-100,  140, -100, -200],
     [ 200,  104,  200, -236],
-    [  20,   92,   20, -164],
+    [  20,   96,   20, -164],
     [  80,   20,   80, -164],
     [ -40,  -52,  -40, -212]
   ];
@@ -295,10 +295,12 @@
    * during the auto phase. Every leg here is at least 112m.
    */
   const ROUTE = [
-    [ 200, 0,  108],
-    [ 200, 0,    0],   // turn 1 — onto the z=0 road
-    [-100, 0,    0],   // turn 2 — onto the x=-100 avenue
-    [-100, 0, -200],   // turn 3 — onto the z=-200 road
+    [ 200, 0,  104],
+    [ 200, 0,    0],   // turn 1
+    [  20, 0,    0],   // turn 2
+    [  20, 0,  100],   // turn 3
+    [-100, 0,  100],   // turn 4  (z=100 boulevard)
+    [-100, 0, -200],   // turn 5
     [-200, 0, -200]
   ];
 
@@ -1635,6 +1637,21 @@
      */
     _buildStreetFurniture() {
       const up = new THREE.Vector3(0, 1, 0);
+      // walk out from the centreline until the surface stops being
+      // carriageway, then stand the post just beyond that
+      const fRay = new THREE.Raycaster();
+      const fT = this._cityTargets || [];
+      const fDown = new THREE.Vector3(0, -1, 0);
+      const kerbOut = (pos, dir) => {
+        let d = 1.5;
+        for (; d <= 30; d += 1.0) {
+          const q = pos.clone().addScaledVector(dir, d);
+          fRay.set(new THREE.Vector3(q.x, 300, q.z), fDown);
+          const h = fRay.intersectObjects(fT, false)[0];
+          if (!h || !isRoadY(h.point.y)) break;
+        }
+        return d + 1.2;
+      };
       const poleMat = new THREE.MeshStandardMaterial({
         color: 0x23262b, roughness: 0.55, metalness: 0.75 });
       this._streetLampMat = new THREE.MeshStandardMaterial({
@@ -1651,7 +1668,7 @@
       for (let t = 0.01; t < 0.99; t += SPACING) {
         const r = this._routeAt(t);
         const sv = new THREE.Vector3().crossVectors(r.tan, up).normalize();
-        const off = Math.max(3.2, this._halfWidthAt(t) - 0.6);
+        const off = kerbOut(r.pos, sv.clone().multiplyScalar(side));
 
         const g = new THREE.Group();
         g.position.copy(r.pos).addScaledVector(sv, side * off);
@@ -1694,7 +1711,7 @@
 
         const r = this._routeAt(Math.max(0, t - 0.035));
         const sv = new THREE.Vector3().crossVectors(r.tan, up).normalize();
-        const off = Math.max(3.4, this._halfWidthAt(t) - 0.5);
+        const off = kerbOut(r.pos, sv);
 
         const g = new THREE.Group();
         g.position.copy(r.pos).addScaledVector(sv, off);
@@ -2135,6 +2152,56 @@
           look.y = c.obj.position.y;
           c.obj.lookAt(look);
         }
+      }
+
+      // ---- junction yielding -------------------------------------------
+      // O(n^2) over 68 vehicles is ~2300 cheap distance tests, no raycasts.
+      const boxHit = (a, b) => {
+        const dx = a.obj.position.x - b.obj.position.x;
+        const dz = a.obj.position.z - b.obj.position.z;
+        const near = (a.len + b.len) * 0.5 + 0.6;
+        if (dx * dx + dz * dz > near * near) return false;
+        const mk = (c) => {
+          const f = new THREE.Vector3(0, 0, 1).applyQuaternion(c.obj.quaternion);
+          const sv = new THREE.Vector3(1, 0, 0).applyQuaternion(c.obj.quaternion);
+          f.y = 0; sv.y = 0; f.normalize(); sv.normalize();
+          return { c: c.obj.position, f: f, s: sv,
+                   hl: (c.len || 3) / 2 + 0.35, hw: (c.width || 2) / 2 + 0.25 };
+        };
+        const A = mk(a), B = mk(b);
+        const d = B.c.clone().sub(A.c); d.y = 0;
+        const axes = [A.f, A.s, B.f, B.s];
+        for (let k = 0; k < 4; k++) {
+          const ax = axes[k];
+          const pr = (X) => Math.abs(X.f.dot(ax)) * X.hl + Math.abs(X.s.dot(ax)) * X.hw;
+          if (Math.abs(d.dot(ax)) > pr(A) + pr(B)) return false;
+        }
+        return true;
+      };
+      for (let i = 0; i < this.traffic.length; i++) {
+        const a = this.traffic[i];
+        if (!a.obj.visible) continue;
+        for (let j = i + 1; j < this.traffic.length; j++) {
+          const b = this.traffic[j];
+          if (!b.obj.visible) continue;
+          if (a.routeIdx === b.routeIdx && a.laneIdx === b.laneIdx) continue;
+          if (!boxHit(a, b)) continue;
+          // lower priority gives way: hold at its last clear pose
+          const give = (a.routeIdx > b.routeIdx) ? a : b;
+          if (give.lastClear) {
+            give.obj.position.copy(give.lastClear);
+            give.yielding = true;
+          }
+        }
+      }
+      // remember a clear pose for next frame
+      for (let i = 0; i < this.traffic.length; i++) {
+        const c = this.traffic[i];
+        if (!c.yielding) {
+          c.lastClear = c.lastClear || new THREE.Vector3();
+          c.lastClear.copy(c.obj.position);
+        }
+        c.yielding = false;
       }
 
       // NOTE: this loop used to raycast 8 vehicles per frame against all
