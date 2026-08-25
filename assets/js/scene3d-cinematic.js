@@ -825,6 +825,13 @@
 
       const files = Array.from(new Set(
         Object.values(VEHICLES).map(v => v.file).concat(TRAFFIC_ONLY_FILES)));
+      // modelled rider, used in place of the old capsule figure
+      try {
+        this._riderModel = (await load('rider.glb')).scene;
+      } catch (e) {
+        console.warn('[Pakka3D] rider model missing, falling back to capsules');
+        this._riderModel = null;
+      }
       const loaded = {};
       await Promise.all(files.map(async (f) => {
         try { loaded[f] = (await load(f)).scene; }
@@ -840,6 +847,7 @@
       this._buildBillboards();
       this._buildStreetFurniture();
       await this._buildLandmarks(load);
+      this._clearFurnitureFromRoad();
     }
 
     /**
@@ -1285,22 +1293,53 @@
       const size = box.getSize(new THREE.Vector3());
       const len = Math.max(size.x, size.z);
       const height = size.y;
-      // _normalize leaves every vehicle facing +Z in group space, so the
-      // handlebars are at POSITIVE z and the seat sits behind them. Getting
-      // these signs backwards stretches the arms into metre-long tubes.
       const tune = RIDER_TUNE[file] ||
         { seatY: 0.58, seatZ: -0.04, barZ: 0.27, barY: 0.82, lean: 0.28 };
-      const opts = {
-        seatY: tune.seatY, seatZ: tune.seatZ,
-        barZ: tune.barZ, barY: tune.barY, lean: tune.lean
-      };
-      if (kind === 'auto') {
-        opts.helmet = 0x2b2f36;
-        opts.jacket = tint || 0x35507a;
+
+      let rider;
+      if (this._riderModel) {
+        // A modelled figure with a real head, shoulders, gloves and boots.
+        // The old capsule build read as a faceless mannequin and, at 1.55m,
+        // towered over a 1.2m delivery bike.
+        rider = this._riderModel.clone(true);
+        const rb = new THREE.Box3().setFromObject(rider);
+        const rh = Math.max(0.01, rb.getSize(new THREE.Vector3()).y);
+        // The model is already a SEATED pose 1.17m tall. Scaling it to the
+        // machine's full height made a 1.94m giant inside the auto; a seated
+        // rider sits below the roofline, so scale to a real seated stature
+        // and clamp it.
+        const target = Math.min(1.30, Math.max(0.95, height * 0.72));
+        rider.scale.setScalar(target / rh);
+        const k = target / rh;
+        // model's hips sit ~0.33 up its own height; drop it so they meet the seat
+        rider.position.set(0, height * tune.seatY - 0.33 * target, len * tune.seatZ);
+        if (kind === 'auto') {
+          rider.position.y = height * 0.22 - 0.33 * target * 0.4;
+          rider.position.z = len * 0.16;
+        }
+        rider.traverse((n) => {
+          if (!n.isMesh) return;
+          n.castShadow = false;
+          n.receiveShadow = true;
+          if (/helmet|visor/i.test(n.name || '')) n.userData.isHead = true;
+          // give each rider its own helmet colour without repainting them all
+          const mats = [].concat(n.material || []);
+          n.material = mats.map((m) => {
+            if (!m || !/helmet/i.test(m.name || '')) return m;
+            const c = m.clone();
+            c.color = new THREE.Color(tint || 0xd4af37);
+            return c;
+          });
+          if (!Array.isArray(n.material)) n.material = n.material;
+        });
       } else {
-        opts.helmet = tint || 0xd4af37;
+        const opts = {
+          seatY: tune.seatY, seatZ: tune.seatZ,
+          barZ: tune.barZ, barY: tune.barY, lean: tune.lean,
+          helmet: tint || 0xd4af37
+        };
+        rider = this._createRider(len, height, opts);
       }
-      const rider = this._createRider(len, height, opts);
       group.add(rider);
       group.userData.rider = rider;
     }
@@ -1742,6 +1781,84 @@
       this.trafficSignals = signals;
       console.log('[Pakka3D] street lamps: ' + n + ' · traffic signals: ' + placed);
       this._syncStreetGlow();
+    }
+
+    /**
+     * Nothing static may stand in the carriageway.
+     *
+     * Traffic has no collision against scenery, so anything left on the road
+     * gets driven straight through. Rather than give 68 vehicles obstacle
+     * tests every frame, guarantee the road is empty: after placing street
+     * furniture, re-probe each item and push it outward until it clears the
+     * kerb, discarding any that cannot be placed.
+     */
+    _clearFurnitureFromRoad() {
+      const ray = new THREE.Raycaster();
+      const T = this._cityTargets || [];
+      const down = new THREE.Vector3(0, -1, 0);
+      const inRoad = (x, z) => {
+        ray.set(new THREE.Vector3(x, 300, z), down);
+        const h = ray.intersectObjects(T, false)[0];
+        return !!(h && isRoadY(h.point.y));
+      };
+      const push = (group) => {
+        const w = new THREE.Vector3();
+        group.getWorldPosition(w);
+        if (!inRoad(w.x, w.z)) return true;
+        // try stepping away from the nearest route point
+        let best = null;
+        for (let a = 0; a < 8; a++) {
+          const ang = (a / 8) * Math.PI * 2;
+          const dir = new THREE.Vector3(Math.cos(ang), 0, Math.sin(ang));
+          for (let d = 2; d <= 16; d += 1.5) {
+            const q = w.clone().addScaledVector(dir, d);
+            if (!inRoad(q.x, q.z)) { best = q; break; }
+          }
+          if (best) break;
+        }
+        if (!best) return false;
+        group.position.add(best.clone().sub(w));
+        return true;
+      };
+      let moved = 0, removed = 0;
+      [this.streetLamps, this.trafficSignals].forEach((holder) => {
+        if (!holder) return;
+        holder.children.slice().forEach((g) => {
+          const before = new THREE.Vector3(); g.getWorldPosition(before);
+          if (!inRoad(before.x, before.z)) return;
+          if (push(g)) moved++;
+          else { holder.remove(g); removed++; }
+        });
+      });
+      // gantry masts too
+      (this.billboards || []).forEach((b) => {
+        const w = new THREE.Vector3(); b.group.getWorldPosition(w);
+        if (inRoad(w.x, w.z)) { if (!push(b.group)) b.group.visible = false; }
+      });
+      // ...and the landmarks. A station or bus stand sitting on the
+      // carriageway is the largest thing traffic can drive through, so these
+      // get a wider search before being given up on.
+      (this.landmarks || []).forEach((lm) => {
+        const w = new THREE.Vector3(); lm.group.getWorldPosition(w);
+        if (!inRoad(w.x, w.z)) return;
+        let placed = false;
+        for (let a = 0; a < 12 && !placed; a++) {
+          const ang = (a / 12) * Math.PI * 2;
+          const dir = new THREE.Vector3(Math.cos(ang), 0, Math.sin(ang));
+          for (let d = 6; d <= 60; d += 3) {
+            const q = w.clone().addScaledVector(dir, d);
+            if (!inRoad(q.x, q.z)) {
+              lm.group.position.add(q.clone().sub(w));
+              placed = true;
+              moved++;
+              break;
+            }
+          }
+        }
+        if (!placed) { lm.group.visible = false; removed++; }
+      });
+      console.log('[Pakka3D] cleared road furniture · moved ' + moved +
+                  ', removed ' + removed);
     }
 
     _syncStreetGlow() {
