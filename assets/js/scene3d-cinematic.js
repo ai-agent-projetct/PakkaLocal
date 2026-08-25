@@ -60,7 +60,6 @@
     'pack_offroad.glb': true,
     'pack_suv.glb': true,
     'pack_pickup.glb': true,
-    'setcbus.glb': true,
     // REGRESSION GUARD: these two were dropped once by a careless block
     // rewrite of the pack-car entries above, which silently sent the ridden
     // Swift Dzire and the Scorpio down the road backwards. Keep them here.
@@ -68,7 +67,7 @@
     'scorpiohp.glb': true
     // these face +Z already — do NOT flip:
     // pack_hatchback, pack_compact, pack_coupe, pack_minivan, pack_car8,
-    // autorickshaw, checkers, sedan, porsche
+    // autorickshaw, checkers, sedan, porsche, setcbus
   };
 
   // Which kind of occupant each model needs. Cars are enclosed and read
@@ -1128,7 +1127,13 @@
         // than picked by feel: outer 0.54 left the footprint off-carriageway
         // 8.1% of the route, 0.42 halves that to 4.0%, and inner 0.20 is the
         // best of its range at 1.6%. Long vehicles hug the centre at 0.16.
-        const laneFrac = big ? 0.16 : (outer ? 0.42 : 0.20);
+        // Lane 0 and lane 2 sit on the SAME side of the road (both oncoming),
+        // as do 1 and 3. So the inner/outer fractions must be far enough
+        // apart to hold two car widths, or same-side neighbours touch.
+        // 0.20 vs 0.42 left only ~0.7m of clearance, and forcing buses to
+        // 0.16 dropped a 4.5m-wide body straight onto the inner lane.
+        // 0.18 vs 0.52 gives ~4.4m of separation instead.
+        const laneFrac = outer ? 0.52 : 0.18;
         const vb = new THREE.Box3().setFromObject(v).getSize(new THREE.Vector3());
         this.traffic.push({
           obj: v,
@@ -1849,7 +1854,7 @@
           const cHit = this._ray.intersectObjects(this._cityTargets, false)[0];
           const cornerOffRoad = !cHit || Math.abs(cHit.point.y - pos.y) > 1.2;
           if (cornerOffRoad) {
-            const floor = (c.laneIdx >= 2) ? 0.34 : 0.10;
+            const floor = (c.laneIdx >= 2) ? 0.44 : 0.10;
             c.laneFrac = Math.max(floor, c.laneFrac * 0.82);
             // If pulling in repeatedly fails to get it back on the road,
             // park it rather than let it keep driving along the footpath.
@@ -1857,6 +1862,9 @@
             if (c.strikes > 6 && !c.parked) {
               c.parked = true;
               c.obj.visible = true;
+              // pull it clear of the running lane, or the vehicles still
+              // moving in that lane will drive straight through it
+              c.laneFrac = 0.80;
               this._parkedCount = (this._parkedCount || 0) + 1;
             }
           } else if (c.strikes) {
@@ -1874,10 +1882,10 @@
           // block here means a local obstruction: tighten this vehicle's
           // lane fraction toward the centreline and let it relax back.
           if (blocked) {
-            const floor = (c.laneIdx >= 2) ? 0.34 : 0.12;
+            const floor = (c.laneIdx >= 2) ? 0.44 : 0.12;
             c.laneFrac = Math.max(floor, c.laneFrac * 0.7);
           } else {
-            const target = c.big ? 0.16 : ((c.laneIdx >= 2) ? 0.42 : 0.20);
+            const target = (c.laneIdx >= 2) ? 0.52 : 0.18;
             c.laneFrac += (target - c.laneFrac) * 0.05;
           }
           c.obj.visible = !blocked;
